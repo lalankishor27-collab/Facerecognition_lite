@@ -284,13 +284,24 @@ extension FaceCameraView: AVCaptureVideoDataOutputSampleBufferDelegate {
                   let results = request.results as? [VNFaceObservation],
                   !results.isEmpty else { return }
 
-            // Select largest face
-            let largestFace = results.max(by: {
-                ($0.boundingBox.width * $0.boundingBox.height) <
-                ($1.boundingBox.width * $1.boundingBox.height)
-            })!
+            // Multi-Face Rejection: reject if more than one face is detected
+            // Prevents spoofing via holding a second device or multiple people in frame
+            if results.count > 1 {
+                self.stateLock.lock()
+                let alreadyDone = self.isFinished || self.isDestroyed
+                if !alreadyDone { self.isFinished = true }
+                self.cancelTimeoutLocked()
+                self.stateLock.unlock()
+                if !alreadyDone {
+                    self.onLivenessFailed?([
+                        "error": "Multiple faces detected (\(results.count)). Only one person must be in frame."
+                    ])
+                }
+                return
+            }
 
-            self.processFaceObservation(largestFace, pixelBuffer: pixelBuffer)
+            // Single face confirmed — proceed with liveness
+            self.processFaceObservation(results[0], pixelBuffer: pixelBuffer)
         }
 
         // Mirror the image for front camera (Vision expects unmirrored)

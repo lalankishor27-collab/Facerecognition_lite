@@ -346,14 +346,24 @@ public class FaceCameraView extends FrameLayout implements LifecycleOwner {
                         return;
                     }
 
-                    // Find largest face
-                    Face face = faces.get(0);
-                    for (Face f : faces) {
-                        if (f.getBoundingBox().width() * f.getBoundingBox().height() >
-                                face.getBoundingBox().width() * face.getBoundingBox().height()) {
-                            face = f;
+                    // Multi-Face Rejection: reject if more than one face is detected
+                    // This prevents spoofing via holding a phone showing someone's video
+                    // alongside the real person, or multiple people in frame
+                    if (faces.size() > 1) {
+                        if (!isFinished.get() && !isDestroyed.get()) {
+                            isFinished.set(true);
+                            cancelTimeout();
+                            WritableMap failEvent = Arguments.createMap();
+                            failEvent.putString("error",
+                                "Multiple faces detected (" + faces.size() + "). Only one person must be in frame.");
+                            emitEvent("onLivenessFailed", failEvent);
                         }
+                        imageProxy.close();
+                        return;
                     }
+
+                    // Single face confirmed — proceed with liveness
+                    Face face = faces.get(0);
 
                     checkLivenessAndProcess(face, imageProxy);
                 })
