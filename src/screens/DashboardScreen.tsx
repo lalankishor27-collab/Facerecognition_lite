@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -16,6 +16,8 @@ import GovernmentHeader from '../components/GovernmentHeader';
 import StatsCardBanner from '../components/StatsCardBanner';
 import NetworkStatusCard from '../components/NetworkStatusCard';
 import AttendanceLogItem from '../components/AttendanceLogItem';
+import PinModal from '../components/PinModal';
+import { isPinConfigured, verifyPin, setupPin } from '../services/admin';
 
 interface DashboardScreenProps {
   users: EnrolledUser[];
@@ -52,6 +54,86 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({
   onSync,
   onClearDatabase,
 }) => {
+  // ─── Admin PIN State ──────────────────────────────────────────
+  const [showPinModal, setShowPinModal] = useState(false);
+  const [pinError, setPinError] = useState('');
+  const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
+  const [pinMode, setPinMode] = useState<'verify' | 'setup'>('verify');
+
+  // ─── Check PIN configuration on mount ─────────────────────────
+  useEffect(() => {
+    const checkPin = async () => {
+      const configured = await isPinConfigured();
+      if (!configured) {
+        setPinMode('setup');
+        setShowPinModal(true);
+      }
+    };
+    checkPin();
+  }, []);
+
+  // ─── PIN-protected action wrapper ─────────────────────────────
+  const requirePin = useCallback((action: () => void) => {
+    setPinError('');
+    setPendingAction(() => action);
+    setPinMode('verify');
+    setShowPinModal(true);
+  }, []);
+
+  // ─── PIN success handler ──────────────────────────────────────
+  const handlePinSuccess = useCallback(async (pin: string) => {
+    if (pinMode === 'setup') {
+      const success = await setupPin(pin);
+      if (success) {
+        setShowPinModal(false);
+        setPinError('');
+        Alert.alert('PIN Created', 'Admin PIN has been configured successfully.');
+      } else {
+        setPinError('Failed to set PIN. Please try again.');
+      }
+      return;
+    }
+
+    // Verify mode
+    const result = await verifyPin(pin);
+    if (result.success) {
+      setShowPinModal(false);
+      setPinError('');
+      // Execute the pending action
+      if (pendingAction) {
+        pendingAction();
+        setPendingAction(null);
+      }
+    } else {
+      setPinError(result.error || 'Incorrect PIN.');
+    }
+  }, [pinMode, pendingAction]);
+
+  // ─── PIN cancel handler ───────────────────────────────────────
+  const handlePinCancel = useCallback(() => {
+    // Don't allow cancel on initial setup
+    if (pinMode === 'setup') {
+      return;
+    }
+    setShowPinModal(false);
+    setPinError('');
+    setPendingAction(null);
+  }, [pinMode]);
+
+  // ─── Protected action handlers ────────────────────────────────
+  const handleRegister = useCallback(() => {
+    requirePin(onRegister);
+  }, [requirePin, onRegister]);
+
+  const handleClearDatabase = useCallback(() => {
+    requirePin(onClearDatabase);
+  }, [requirePin, onClearDatabase]);
+
+  const handleToggleNetwork = useCallback(() => {
+    requirePin(onToggleNetwork);
+  }, [requirePin, onToggleNetwork]);
+
+  // ─── Derived state ────────────────────────────────────────────
   const pendingLogs = logs.filter(log => log.syncStatus === 'pending');
 
   // Dynamic attendance rate calculation
@@ -73,11 +155,11 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({
 
       <NetworkStatusCard
         isOnline={isOnline}
-        onToggle={onToggleNetwork}
+        onToggle={handleToggleNetwork}
         pulseAnim={pulseAnim}
       />
 
-      {/* Biometric Attendance Authentication */}
+      {/* Biometric Attendance Authentication (UNPROTECTED) */}
       <View style={styles.actionCard}>
         <Text style={styles.sectionHeader}>Biometric Attendance Audit</Text>
         <Text style={styles.panelDescription}>
@@ -89,7 +171,7 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({
         </TouchableOpacity>
       </View>
 
-      {/* Personnel Enrollment */}
+      {/* Personnel Enrollment (PIN PROTECTED) */}
       <View style={styles.actionCard}>
         <Text style={styles.sectionHeader}>Personnel Enrollment</Text>
         <TextInput
@@ -110,12 +192,12 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({
           maxLength={20}
         />
         {enrollError ? <Text style={styles.errorText}>{enrollError}</Text> : null}
-        <TouchableOpacity style={styles.primaryActionButton} onPress={onRegister}>
+        <TouchableOpacity style={styles.primaryActionButton} onPress={handleRegister}>
           <Text style={styles.primaryActionButtonText}>REGISTER FACE TEMPLATE</Text>
         </TouchableOpacity>
       </View>
 
-      {/* Offline Attendance Logs */}
+      {/* Offline Attendance Logs (Sync UNPROTECTED) */}
       <View style={styles.actionCard}>
         <View style={styles.syncRow}>
           <Text style={styles.sectionHeader}>Offline Attendance Cache</Text>
@@ -143,10 +225,19 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({
         )}
       </View>
 
-      {/* Database Maintenance */}
-      <TouchableOpacity style={styles.resetBtn} onPress={onClearDatabase}>
+      {/* Database Maintenance (PIN PROTECTED) */}
+      <TouchableOpacity style={styles.resetBtn} onPress={handleClearDatabase}>
         <Text style={styles.resetBtnText}>FACTORY RESET LOCAL STORAGE</Text>
       </TouchableOpacity>
+
+      {/* Admin PIN Modal */}
+      <PinModal
+        visible={showPinModal}
+        mode={pinMode}
+        onSuccess={handlePinSuccess}
+        onCancel={handlePinCancel}
+        error={pinError}
+      />
     </ScrollView>
   );
 };
