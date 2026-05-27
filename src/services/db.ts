@@ -501,7 +501,7 @@ export const syncAndPurgeLogs = async (): Promise<SyncResult> => {
       }
     } else {
       // ─── Simulation (no endpoint configured) ──────────────────
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise<void>(resolve => setTimeout(() => resolve(), 2000));
       uploadSuccess = true;
       console.warn(
         '[DB] Sync simulation used — configure AWS_SYNC_CONFIG.apiEndpoint for production',
@@ -522,9 +522,9 @@ export const syncAndPurgeLogs = async (): Promise<SyncResult> => {
         return log;
       });
 
-      // Purge successfully synced logs (not conflicts)
+      // Purge only the logs we just synced (not pre-existing synced logs or conflicts)
       const remainingLogs = updatedLogs.filter(
-        log => log.syncStatus === 'pending' || conflictSet.has(log.id),
+        log => !syncedLogIds.has(log.id) || conflictSet.has(log.id),
       );
       await AsyncStorage.setItem(LOGS_KEY, JSON.stringify(remainingLogs));
 
@@ -562,7 +562,7 @@ export const syncAndPurgeLogs = async (): Promise<SyncResult> => {
  */
 export const clearDatabase = async (): Promise<boolean> => {
   try {
-    await AsyncStorage.multiRemove([USERS_KEY, LOGS_KEY, '@securefaceapp_crypto_key', SYNC_META_KEY]);
+    await (AsyncStorage as any).multiRemove([USERS_KEY, LOGS_KEY, '@securefaceapp_crypto_key', SYNC_META_KEY]);
     return true;
   } catch (e) {
     console.error('[DB] Error clearing database:', e);

@@ -271,21 +271,22 @@ describe('edge cases', () => {
     expect(isFinite(score)).toBe(true);
   });
 
-  it('identifyFace with threshold 0 matches everything', async () => {
+  it('identifyFace with threshold -2 matches even opposite vectors', async () => {
     await enrollUser('Alice', 'EMP001', Array(192).fill(0.5));
-    const differentProbe = Array(192).fill(-0.5); // Opposite direction
+    const differentProbe = Array(192).fill(-0.5); // Opposite direction, cosine = -1.0
 
-    const result = await identifyFace(differentProbe, -2.0); // Very low threshold
+    const result = await identifyFace(differentProbe, -2.0); // Threshold below -1.0
+    // cosine(-0.5, 0.5) = -1.0, and -1.0 >= -2.0, so it matches
     expect(result.matched).toBe(true);
   });
 
-  it('identifyFace with threshold 1.0 matches nothing (unless identical)', async () => {
+  it('identifyFace with threshold 1.0 only matches perfectly identical vectors', async () => {
     const emb = Array(192).fill(0.5);
     await enrollUser('Alice', 'EMP001', emb);
 
-    // Slightly different probe
-    const probe = emb.map(v => v + 0.01);
-    const result = await identifyFace(probe, 1.0);
+    // Orthogonal probe (cosine = 0) should NOT match at threshold 1.0
+    const orthogonalProbe = Array.from({ length: 192 }, (_, i) => (i % 2 === 0 ? 0.5 : -0.5));
+    const result = await identifyFace(orthogonalProbe, 1.0);
     expect(result.matched).toBe(false);
   });
 
