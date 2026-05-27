@@ -73,3 +73,7 @@ yarn-error.log
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
+
+
+# Metro JS bundle (build artifact, regenerated on every build)
+android/app/src/main/assets/index.android.bundle
