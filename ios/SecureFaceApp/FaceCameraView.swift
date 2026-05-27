@@ -337,14 +337,16 @@ extension FaceCameraView: AVCaptureVideoDataOutputSampleBufferDelegate {
                 }
 
             case "left":
-                // yaw > 18° = looking right in camera = head turned left
+                // Vision yaw is in RADIANS (unlike Android ML Kit which uses degrees)
+                // 18° = π/10 ≈ 0.314 radians
                 if let yaw = face.yaw?.floatValue {
-                    passed = yaw >= 18.0
+                    passed = yaw >= 0.314
                 }
 
             case "right":
+                // -18° = -0.314 radians
                 if let yaw = face.yaw?.floatValue {
-                    passed = yaw <= -18.0
+                    passed = yaw <= -0.314
                 }
 
             default:
@@ -365,7 +367,8 @@ extension FaceCameraView: AVCaptureVideoDataOutputSampleBufferDelegate {
             }
         } else {
             // All challenges passed — check face is roughly frontal before capture
-            guard let yaw = face.yaw?.floatValue, abs(yaw) < 8.0 else { return }
+            // 8° = 0.14 radians (Vision uses radians, not degrees)
+            guard let yaw = face.yaw?.floatValue, abs(yaw) < 0.14 else { return }
 
             // Atomic set: only capture once
             stateLock.lock()

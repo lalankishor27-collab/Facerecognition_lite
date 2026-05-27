@@ -4,6 +4,7 @@
  * These handle side effects (DB calls, permissions, alerts) and dispatch
  * state transitions to the reducer. Keeps the reducer pure.
  */
+import React from 'react';
 import { Alert, Platform, PermissionsAndroid } from 'react-native';
 import { AppAction } from './AppContext';
 import {

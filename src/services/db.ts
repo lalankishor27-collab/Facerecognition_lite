@@ -17,7 +17,6 @@ import { LIVENESS_CONFIG } from '../constants/theme';
 import {
   encryptEmbedding,
   decryptEmbedding,
-  isCryptoAvailable,
 } from './crypto';
 
 const USERS_KEY = '@securefaceapp_users';

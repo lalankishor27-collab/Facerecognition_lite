@@ -9,7 +9,7 @@
  * - Avoids prop drilling
  * - Better performance (components only re-render on relevant state changes)
  */
-import React, { createContext, useContext, useReducer, useRef, useCallback, useEffect } from 'react';
+import React, { createContext, useContext, useReducer, useRef, useEffect } from 'react';
 import { Animated } from 'react-native';
 import {
   ScreenName,
