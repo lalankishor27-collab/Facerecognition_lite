@@ -84,6 +84,29 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
+        // ABI restriction is handled by the splits block below
+    }
+
+    // Per-ABI APK splits — build a dedicated arm64 APK instead of fat APK
+    splits {
+        abi {
+            enable true
+            reset()
+            include "arm64-v8a"
+            universalApk false
+        }
+    }
+
+    // Strip native debug symbols and exclude unnecessary files
+    packagingOptions {
+        // Remove duplicate META-INF licenses
+        exclude 'META-INF/DEPENDENCIES'
+        exclude 'META-INF/LICENSE'
+        exclude 'META-INF/LICENSE.txt'
+        exclude 'META-INF/NOTICE'
+        exclude 'META-INF/NOTICE.txt'
+        // Strip debug symbols from .so files (keeps stack traces but saves ~30%)
+        doNotStrip ''
     }
     aaptOptions {
         noCompress "tflite"
@@ -99,10 +122,24 @@ android {
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
+            // NOTE: minifyEnabled intentionally OFF for debug
+            // R8 on debug breaks TFLite JNI paths and causes lag/slowness
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
+            // ⚠️  TODO: Generate a production keystore before releasing to Play Store.
+            // See: https://reactnative.dev/docs/signed-apk-android
+            //
+            // Steps:
+            //   keytool -genkey -v -keystore securefaceapp-release.keystore \
+            //     -alias securefaceapp -keyalg RSA -keysize 2048 -validity 10000
+            //
+            // Then update signingConfigs.release with:
+            //   storeFile file('securefaceapp-release.keystore')
+            //   storePassword System.getenv("KEYSTORE_PASSWORD")
+            //   keyAlias 'securefaceapp'
+            //   keyPassword System.getenv("KEY_PASSWORD")
+            //
+            // DANGER: The line below uses the DEBUG keystore for release — for hackathon/demo only.
             signingConfig signingConfigs.debug
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
@@ -123,7 +160,8 @@ dependencies {
     // TensorFlow Lite
     implementation 'org.tensorflow:tensorflow-lite:2.14.0'
 
-    // ML Kit Face Detection
+    // ML Kit Face Detection — BUNDLED for reliability
+    // Ships detector + models inside APK — works offline, no Play Services download lag
     implementation 'com.google.mlkit:face-detection:16.1.6'
 
     // CameraX

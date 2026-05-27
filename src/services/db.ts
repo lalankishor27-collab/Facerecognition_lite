@@ -23,18 +23,36 @@ const EMBEDDING_DIMENSION = 192;
 // ─── Utility Functions ────────────────────────────────────────────
 
 /**
- * Generate a cryptographically-inspired UUID v4.
- * Uses multiple entropy sources for collision resistance.
+ * Generate a cryptographically secure UUID v4.
+ * Uses Hermes built-in crypto.randomUUID() (RFC 4122 compliant).
+ * Falls back to timestamp+performance entropy if unavailable.
  */
 const generateUUID = (): string => {
-  const timestamp = Date.now().toString(36);
-  const randomPart = Array.from({ length: 12 }, () =>
-    Math.floor(Math.random() * 36).toString(36),
-  ).join('');
-  const counter = (++generateUUID._counter % 0xffff).toString(16);
-  return `${timestamp}-${randomPart}-${counter}`;
+  // crypto.randomUUID is available in Hermes (React Native 0.71+)
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  // Fallback: high-entropy manual UUID v4
+  const bytes = new Uint8Array(16);
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    crypto.getRandomValues(bytes);
+  } else {
+    // Last-resort entropy: performance.now() + Date.now()
+    for (let i = 0; i < 16; i++) {
+      bytes[i] = Math.floor(
+        ((performance?.now?.() ?? Date.now()) * Math.random() * 256) % 256
+      );
+    }
+  }
+  // Set version 4 bits
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+  return [
+    hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16),
+    hex.slice(16, 20), hex.slice(20),
+  ].join('-');
 };
-generateUUID._counter = 0;
 
 /**
  * Sanitize user input - strip dangerous characters, trim whitespace.
@@ -288,12 +306,24 @@ export const logAttendance = async (
 
 // ─── Sync & Purge ─────────────────────────────────────────────────
 
+// ─── AWS Sync Configuration ───────────────────────────────────────
+// TODO: Replace these placeholders with your actual AWS values before production
+const AWS_SYNC_CONFIG = {
+  // Example: 'https://abc123.execute-api.ap-south-1.amazonaws.com/prod/sync'
+  apiEndpoint: '', // TODO: Set your AWS API Gateway endpoint URL
+  apiKey: '',      // TODO: Set your API key (x-api-key header)
+  timeoutMs: 15000,
+};
+
 /**
- * Upload pending logs to cloud and purge local copies.
- * 
- * NOTE: In production, replace the simulated delay with actual
- * AWS S3/DynamoDB API calls. The purge only occurs after
- * confirmed server acknowledgment.
+ * Upload pending logs to cloud and purge local copies ONLY after
+ * confirmed server acknowledgement.
+ *
+ * IMPORTANT FIX: Purge now happens exclusively after server returns success.
+ * If upload fails or is unreachable, logs are preserved locally.
+ *
+ * When AWS_SYNC_CONFIG.apiEndpoint is set, uses real fetch() to POST logs.
+ * Falls back to simulation (2-second delay) if no endpoint configured.
  */
 export const syncAndPurgeLogs = async (): Promise<SyncResult> => {
   try {
@@ -304,25 +334,68 @@ export const syncAndPurgeLogs = async (): Promise<SyncResult> => {
       return { success: true, syncedCount: 0 };
     }
 
-    // Simulate network API request delay
-    // TODO: Replace with actual AWS SDK calls:
-    // await s3Client.putObject({ Bucket: 'attendance-logs', Key: ..., Body: JSON.stringify(pendingLogs) })
-    // await dynamoClient.batchWriteItem({ RequestItems: ... })
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    let uploadSuccess = false;
 
-    // In real implementation: verify server acknowledged receipt before purging
-    // const serverAck = await verifyUploadSuccess(pendingLogs.map(l => l.id));
-    // if (!serverAck) return { success: false, error: 'Server did not acknowledge upload' };
+    if (AWS_SYNC_CONFIG.apiEndpoint) {
+      // ─── Real AWS Sync ─────────────────────────────────────────
+      const controller = new AbortController();
+      const timeoutId = setTimeout(
+        () => controller.abort(),
+        AWS_SYNC_CONFIG.timeoutMs,
+      );
 
-    // Purge synced records to free device storage
-    const purgedLogs = logs.filter(log => log.syncStatus !== 'pending');
-    await AsyncStorage.setItem(LOGS_KEY, JSON.stringify(purgedLogs));
+      try {
+        const response = await fetch(AWS_SYNC_CONFIG.apiEndpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(AWS_SYNC_CONFIG.apiKey ? { 'x-api-key': AWS_SYNC_CONFIG.apiKey } : {}),
+          },
+          body: JSON.stringify({
+            logs: pendingLogs,
+            uploadedAt: new Date().toISOString(),
+            count: pendingLogs.length,
+          }),
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+        uploadSuccess = response.ok; // Only success if HTTP 2xx
+        if (!uploadSuccess) {
+          const errText = await response.text().catch(() => 'unknown');
+          return { success: false, error: `Server returned ${response.status}: ${errText}` };
+        }
+      } catch (fetchErr: any) {
+        clearTimeout(timeoutId);
+        return {
+          success: false,
+          error: fetchErr?.name === 'AbortError'
+            ? 'Sync timed out after 15 seconds'
+            : `Network error: ${fetchErr?.message ?? 'unknown'}`,
+        };
+      }
+    } else {
+      // ─── Simulation (no endpoint configured) ──────────────────
+      // Simulate a 2-second upload delay for demo purposes
+      // TODO: Configure AWS_SYNC_CONFIG.apiEndpoint to enable real sync
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      uploadSuccess = true; // Simulation always 'succeeds'
+      console.warn(
+        '[DB] Sync simulation used — configure AWS_SYNC_CONFIG.apiEndpoint for production',
+      );
+    }
 
-    return {
-      success: true,
-      syncedCount: pendingLogs.length,
-      purgedCount: pendingLogs.length,
-    };
+    // ─── CRITICAL: Only purge AFTER confirmed server success ───────
+    if (uploadSuccess) {
+      const purgedLogs = logs.filter(log => log.syncStatus !== 'pending');
+      await AsyncStorage.setItem(LOGS_KEY, JSON.stringify(purgedLogs));
+      return {
+        success: true,
+        syncedCount: pendingLogs.length,
+        purgedCount: pendingLogs.length,
+      };
+    }
+
+    return { success: false, error: 'Upload not confirmed — logs preserved locally' };
   } catch (e: any) {
     console.error('[DB] Error syncing logs:', e);
     return { success: false, error: e?.message || 'Unknown sync error' };

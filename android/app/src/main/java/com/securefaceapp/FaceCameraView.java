@@ -140,7 +140,7 @@ public class FaceCameraView extends FrameLayout implements LifecycleOwner {
      * #8 Fix: Use try-with-resources to prevent FileInputStream/AssetFileDescriptor leak.
      */
     private MappedByteBuffer loadModelFile(Context context) throws IOException {
-        try (AssetFileDescriptor fileDescriptor = context.getAssets().openFd("mobilefacenet.tflite");
+        try (AssetFileDescriptor fileDescriptor = context.getAssets().openFd("mobilefacenet_tuned.tflite");
              FileInputStream inputStream = new FileInputStream(fileDescriptor.getFileDescriptor())) {
             FileChannel fileChannel = inputStream.getChannel();
             long startOffset = fileDescriptor.getStartOffset();

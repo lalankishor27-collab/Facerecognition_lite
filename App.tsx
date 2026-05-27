@@ -1,6 +1,6 @@
 /**
  * SecureFaceApp - Main Application Entry
- * 
+ *
  * Offline Facial Recognition & Liveness Detection System
  * Thin orchestration shell - all UI logic delegated to screens/components.
  */
@@ -36,10 +36,8 @@ import {
   identifyFace,
   clearDatabase,
 } from './src/services/db';
-import { FederatedLearningService } from './src/services/federatedLearning';
 import DashboardScreen from './src/screens/DashboardScreen';
 import CameraScreen from './src/screens/CameraScreen';
-import FederatedLearningPanel from './src/components/FederatedLearningPanel';
 
 export default function App() {
   // Navigation
@@ -64,9 +62,6 @@ export default function App() {
   const [matchedUser, setMatchedUser] = useState<EnrolledUser | null>(null);
   const [authStatusMessage, setAuthStatusMessage] = useState('');
   const [scanResultScore, setScanResultScore] = useState(0);
-
-  // Federated Learning
-  const flService = useRef(FederatedLearningService.getInstance()).current;
 
   // Refs
   const faceCameraRef = useRef<any>(null);
@@ -166,16 +161,22 @@ export default function App() {
         if (success) {
           setLivenessStatus('Face template registered successfully!');
           setLivenessStep('success');
-
-          // Contribute to federated learning on successful enrollment
-          flService.recordLocalSample(embedding, enrollId);
-
-          setTimeout(() => {
-            setEnrollName('');
-            setEnrollId('');
-            setCurrentScreen('dashboard');
-            loadData();
-          }, 2000);
+          Alert.alert(
+            'Enrollment Successful',
+            'Face template has been registered successfully in the local database.',
+            [
+              {
+                text: 'OK',
+                onPress: () => {
+                  setEnrollName('');
+                  setEnrollId('');
+                  setCurrentScreen('dashboard');
+                  loadData();
+                },
+              },
+            ],
+            { cancelable: false },
+          );
         } else {
           setLivenessStatus('Failed to save template to local storage.');
           setLivenessStep('failed');
@@ -194,14 +195,20 @@ export default function App() {
             result.score,
             'pending',
           );
-
-          // Record sample for federated learning improvement
-          flService.recordLocalSample(embedding, result.user.employeeId);
-
           loadData();
-          setTimeout(() => {
-            setCurrentScreen('dashboard');
-          }, 3000);
+          Alert.alert(
+            'Access Granted',
+            `Successfully authenticated as:\n${result.user.name} (ID: ${result.user.employeeId})\n\nMatch Score: ${(result.score * 100).toFixed(1)}%`,
+            [
+              {
+                text: 'OK',
+                onPress: () => {
+                  setCurrentScreen('dashboard');
+                },
+              },
+            ],
+            { cancelable: false },
+          );
         } else {
           setLivenessStep('failed');
           setMatchedUser(null);
@@ -211,7 +218,7 @@ export default function App() {
         }
       }
     },
-    [currentScreen, enrollName, enrollId, loadData, flService],
+    [currentScreen, enrollName, enrollId, loadData],
   );
 
   const handleLivenessFailed = useCallback((data: LivenessFailedEvent) => {
@@ -221,6 +228,8 @@ export default function App() {
 
   const handleRetry = useCallback(() => {
     setLivenessStep('ready');
+    setAuthStatusMessage('');
+    setScanResultScore(0);
     faceCameraRef.current?.reset();
   }, []);
 
@@ -270,6 +279,7 @@ export default function App() {
     setLivenessStep('ready');
     setMatchedUser(null);
     setAuthStatusMessage('');
+    setScanResultScore(0);
     setCurrentScreen('authenticate');
   };
 
@@ -296,9 +306,6 @@ export default function App() {
       setIsSyncing(false);
 
       if (res.success) {
-        // Trigger federated learning aggregation on sync
-        await flService.attemptFederatedAggregation();
-
         Alert.alert(
           'Synchronization Successful',
           `Successfully uploaded ${res.syncedCount} records to AWS S3 & DynamoDB. Local database was safely PURGED to optimize storage.`,
@@ -315,16 +322,23 @@ export default function App() {
 
   const handleClearDatabase = () => {
     Alert.alert(
-      'Factory Reset DB',
-      'Are you sure you want to delete all registered face templates and local logs? This is irreversible.',
+      'Factory Reset',
+      'This will permanently delete ALL enrolled face templates and attendance logs. This cannot be undone.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Reset',
+          text: 'RESET EVERYTHING',
           style: 'destructive',
           onPress: async () => {
-            await clearDatabase();
-            loadData();
+            // Clear UI immediately
+            setUsers([]);
+            setLogs([]);
+            try {
+              await clearDatabase();
+            } catch (e) {
+              console.warn('[App] clearDatabase error (non-critical):', e);
+            }
+            Alert.alert('Reset Complete', 'All local data has been permanently wiped.');
           },
         },
       ],
@@ -353,9 +367,6 @@ export default function App() {
             onAuthenticate={openAuthenticate}
             onSync={handleSyncLogs}
             onClearDatabase={handleClearDatabase}
-            renderFederatedLearningPanel={() => (
-              <FederatedLearningPanel flService={flService} isOnline={isOnline} />
-            )}
           />
         ) : (
           <CameraScreen

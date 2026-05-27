@@ -65,15 +65,3 @@ export const LIVENESS_CONFIG = {
   HEAD_TURN_THRESHOLD: 18.0,
   STRAIGHT_FACE_THRESHOLD: 8.0,
 } as const;
-
-// Federated learning config
-export const FL_CONFIG = {
-  LOCAL_EPOCHS: 3,
-  LEARNING_RATE: 0.001,
-  MIN_SAMPLES_FOR_TRAINING: 5,
-  MODEL_VERSION_KEY: '@securefaceapp_model_version',
-  FL_METRICS_KEY: '@securefaceapp_fl_metrics',
-  GRADIENT_CLIP_NORM: 1.0,
-  NOISE_MULTIPLIER: 0.1, // Differential privacy noise
-  DELTA: 1e-5,
-} as const;

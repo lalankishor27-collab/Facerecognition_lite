@@ -26,8 +26,12 @@ class FaceCameraViewManager: RCTViewManager {
       }
 
       // Fallback: direct view hierarchy search (New Architecture / Fabric)
-      // This handles the case where bridge.uiManager is nil under Fabric
-      if let window = UIApplication.shared.windows.first,
+      // Uses connectedScenes API (iOS 13+) to avoid deprecated windows.first
+      let keyWindow = UIApplication.shared.connectedScenes
+        .compactMap { $0 as? UIWindowScene }
+        .flatMap { $0.windows }
+        .first { $0.isKeyWindow }
+      if let window = keyWindow,
          let view = self.findFaceCameraView(in: window) {
         view.resetLiveness()
       }

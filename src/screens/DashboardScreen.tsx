@@ -33,8 +33,6 @@ interface DashboardScreenProps {
   onAuthenticate: () => void;
   onSync: () => void;
   onClearDatabase: () => void;
-  // Federated Learning
-  renderFederatedLearningPanel?: () => React.ReactNode;
 }
 
 const DashboardScreen: React.FC<DashboardScreenProps> = ({
@@ -53,7 +51,6 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({
   onAuthenticate,
   onSync,
   onClearDatabase,
-  renderFederatedLearningPanel,
 }) => {
   const pendingLogs = logs.filter(log => log.syncStatus === 'pending');
 
@@ -145,9 +142,6 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({
           logs.map(log => <AttendanceLogItem key={log.id} log={log} />)
         )}
       </View>
-
-      {/* Federated Learning Panel */}
-      {renderFederatedLearningPanel && renderFederatedLearningPanel()}
 
       {/* Database Maintenance */}
       <TouchableOpacity style={styles.resetBtn} onPress={onClearDatabase}>
