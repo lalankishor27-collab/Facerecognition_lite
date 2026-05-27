@@ -26,8 +26,9 @@ target 'SecureFaceApp' do
   # TFLite for on-device face embedding extraction (matches Android MobileFaceNet pipeline)
   pod 'TensorFlowLiteSwift', '~> 2.14.0'
 
-  # ML Kit Face Detection for liveness challenge processing
-  pod 'GoogleMLKit/FaceDetection', '~> 5.0'
+  # Face detection uses Apple Vision framework (system framework, no extra pod needed)
+  # Liveness challenges: blink/smile detected via Vision landmark analysis
+  # Head turn: detected via VNFaceObservation.yaw property
 
   post_install do |installer|
     react_native_post_install(

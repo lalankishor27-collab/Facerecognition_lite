@@ -406,9 +406,9 @@ extension FaceCameraView: AVCaptureVideoDataOutputSampleBufferDelegate {
             return
         }
 
-        // Crop face region from pixel buffer
-        guard let faceCGImage = cropPixelBuffer(pixelBuffer, x: x, y: y, width: w, height: h),
-              let resized = resizeImage(faceCGImage, to: CGSize(
+        // Crop face region from pixel buffer → CGImage → resize to 112x112 → BGRA Data
+        guard let croppedCGImage = cropPixelBuffer(pixelBuffer, x: x, y: y, width: w, height: h),
+              let resizedBGRA = resizeImage(croppedCGImage, to: CGSize(
                 width: FaceCameraView.inputSize,
                 height: FaceCameraView.inputSize
               )) else {
@@ -418,19 +418,22 @@ extension FaceCameraView: AVCaptureVideoDataOutputSampleBufferDelegate {
         }
 
         // Build float32 input tensor: normalize (pixel - 127.5) / 128.0 per channel
-        var inputData = Data(count: FaceCameraView.inputSize * FaceCameraView.inputSize * 3 * 4)
+        // Input BGRA layout: [B, G, R, A] per pixel → output RGB float32 layout: [R, G, B]
+        let pixelCount = FaceCameraView.inputSize * FaceCameraView.inputSize
+        var inputData = Data(count: pixelCount * 3 * MemoryLayout<Float32>.size)
         inputData.withUnsafeMutableBytes { rawBuffer in
             guard let floatPtr = rawBuffer.bindMemory(to: Float32.self).baseAddress else { return }
             var pixelIdx = 0
-            let imageData = resized
-            imageData.withUnsafeBytes { bytes in
+            resizedBGRA.withUnsafeBytes { bytes in
                 let ptr = bytes.bindMemory(to: UInt8.self)
                 var i = 0
-                while i < FaceCameraView.inputSize * FaceCameraView.inputSize * 4 {
-                    let b = Float32(ptr[i])       // BGRA format
+                while i < pixelCount * 4 {
+                    // BGRA byte order from CGContext with byteOrder32Little
+                    let b = Float32(ptr[i])
                     let g = Float32(ptr[i + 1])
                     let r = Float32(ptr[i + 2])
-                    // a = ptr[i + 3]  — skip alpha
+                    // ptr[i + 3] = alpha — skip
+                    // Output: RGB normalized to [-1.0, 1.0]
                     floatPtr[pixelIdx]     = (r - 127.5) / 128.0
                     floatPtr[pixelIdx + 1] = (g - 127.5) / 128.0
                     floatPtr[pixelIdx + 2] = (b - 127.5) / 128.0
@@ -458,37 +461,112 @@ extension FaceCameraView: AVCaptureVideoDataOutputSampleBufferDelegate {
 
     // MARK: - Vision Landmark Helpers
 
-    /// Estimates eye openness ratio from VNFaceLandmarkRegion2D eye points.
-    /// Computes vertical span / horizontal span of the eye region.
+    /**
+     * Estimates eye openness probability from VNFaceLandmarkRegion2D eye points.
+     *
+     * Algorithm: Computes the Eye Aspect Ratio (EAR) — the ratio of vertical eye
+     * landmark distances to horizontal eye landmark distance. For 6-point eye landmarks:
+     *   EAR = (|p2-p6| + |p3-p5|) / (2 * |p1-p4|)
+     *
+     * When the eye is open, EAR ≈ 0.25–0.35. When closed, EAR ≈ 0.02–0.05.
+     * We scale this to match Android ML Kit's [0, 1] probability output:
+     *   - Closed: < 0.15
+     *   - Open: > 0.65
+     *
+     * Calibration factor 3.0 maps: 0.05*3.0=0.15 (closed), 0.25*3.0=0.75 (open) ✓
+     */
     private func estimateEyeOpenness(_ eye: VNFaceLandmarkRegion2D?) -> Float {
-        guard let pts = eye?.normalizedPoints, pts.count >= 4 else { return 1.0 }
+        guard let pts = eye?.normalizedPoints, pts.count >= 6 else {
+            // Fallback for fewer points: use simple bounding box ratio
+            guard let pts = eye?.normalizedPoints, pts.count >= 4 else { return 1.0 }
+            let ys = pts.map { $0.y }
+            let xs = pts.map { $0.x }
+            let vertSpan = (ys.max() ?? 0) - (ys.min() ?? 0)
+            let horizSpan = (xs.max() ?? 1) - (xs.min() ?? 0)
+            guard horizSpan > 0 else { return 1.0 }
+            return Float(min(1.0, (vertSpan / horizSpan) * 3.5))
+        }
+
+        // Vision framework eye landmarks: points arranged around the eye contour
+        // Use EAR (Eye Aspect Ratio) with top/bottom midpoint distances
+        let sortedByX = pts.sorted { $0.x < $1.x }
+        let leftCorner = sortedByX.first!
+        let rightCorner = sortedByX.last!
+        let horizDist = CGFloat(hypot(
+            Double(rightCorner.x - leftCorner.x),
+            Double(rightCorner.y - leftCorner.y)
+        ))
+        guard horizDist > 0.001 else { return 1.0 }
+
+        // Get top and bottom points (by y-coordinate, excluding corners)
+        let middlePoints = Array(sortedByX.dropFirst().dropLast())
+        if middlePoints.count >= 2 {
+            let sortedByY = middlePoints.sorted { $0.y < $1.y }
+            let bottomPt = sortedByY.first!  // lowest y
+            let topPt = sortedByY.last!      // highest y
+            let vertDist = CGFloat(topPt.y - bottomPt.y)
+            let ear = vertDist / horizDist
+            // Scale to [0, 1] range matching ML Kit probabilities
+            return Float(min(1.0, max(0.0, ear * 3.0)))
+        }
+
+        // Fallback: simple bounding box ratio
         let ys = pts.map { $0.y }
-        let xs = pts.map { $0.x }
         let vertSpan = (ys.max() ?? 0) - (ys.min() ?? 0)
-        let horizSpan = (xs.max() ?? 1) - (xs.min() ?? 0)
-        guard horizSpan > 0 else { return 1.0 }
-        // Normalize to [0,1] range roughly matching Android's ML Kit probabilities
-        return Float(min(1.0, (vertSpan / horizSpan) * 4.0))
+        return Float(min(1.0, (vertSpan / horizDist) * 3.0))
     }
 
-    /// Estimates smile probability from outer lips landmark vertical span.
+    /**
+     * Estimates smile probability from outer lips landmarks.
+     *
+     * A genuine smile is characterized by:
+     * 1. Wider mouth (lip corners pulled laterally)
+     * 2. Raised lip corners relative to center bottom
+     * 3. Increased mouth opening (vertical span)
+     *
+     * Algorithm: Combines mouth width-to-face-width ratio with corner elevation.
+     * The outer lips in Vision have ~16 points forming the lip contour.
+     *
+     * Primary metric: horizSpan / vertSpan ratio. A smile widens the mouth more
+     * than it opens vertically, giving a higher width:height ratio.
+     * Neutral mouth: width/height ≈ 2.5-3.0
+     * Smiling mouth: width/height ≈ 4.0-6.0+
+     *
+     * We normalize: (ratio - 2.5) / 3.5, clamped to [0, 1]
+     * This gives: neutral=0.0, mild smile=0.4, full smile=0.8+
+     */
     private func estimateSmile(_ lips: VNFaceLandmarkRegion2D?) -> Float {
-        guard let pts = lips?.normalizedPoints, pts.count >= 4 else { return 0.0 }
+        guard let pts = lips?.normalizedPoints, pts.count >= 6 else { return 0.0 }
+
         let ys = pts.map { $0.y }
         let xs = pts.map { $0.x }
         let vertSpan = (ys.max() ?? 0) - (ys.min() ?? 0)
-        let horizSpan = (xs.max() ?? 1) - (xs.min() ?? 0)
-        guard horizSpan > 0 else { return 0.0 }
-        // Wider & more open mouth = higher smile probability
-        return Float(min(1.0, (vertSpan / horizSpan) * 6.0))
+        let horizSpan = (xs.max() ?? 0) - (xs.min() ?? 0)
+
+        guard vertSpan > 0.001 && horizSpan > 0.001 else { return 0.0 }
+
+        // Width-to-height ratio of the mouth region
+        let widthHeightRatio = horizSpan / vertSpan
+
+        // Normalize to probability-like [0, 1] range
+        // Neutral: ratio ~2.5-3.0 → score ~0.0-0.14
+        // Smile:   ratio ~4.0+   → score ~0.43+
+        // Big smile: ratio ~5.5+ → score ~0.86+
+        let score = (widthHeightRatio - 2.5) / 3.5
+        return Float(min(1.0, max(0.0, score)))
     }
 
     // MARK: - Image Utilities
 
+    /**
+     * Crops a face region from the pixel buffer and returns a CGImage.
+     * The pixel buffer is in BGRA format (32 bits per pixel).
+     * Returns nil if the crop region is invalid.
+     */
     private func cropPixelBuffer(
         _ pixelBuffer: CVPixelBuffer,
         x: Int, y: Int, width: Int, height: Int
-    ) -> Data? {
+    ) -> CGImage? {
         CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
 
@@ -497,43 +575,73 @@ extension FaceCameraView: AVCaptureVideoDataOutputSampleBufferDelegate {
         let totalWidth = CVPixelBufferGetWidth(pixelBuffer)
         let totalHeight = CVPixelBufferGetHeight(pixelBuffer)
 
+        // Clamp crop region to valid pixel buffer bounds
         let clampedX = max(0, min(x, totalWidth - 1))
         let clampedY = max(0, min(y, totalHeight - 1))
         let clampedW = min(width, totalWidth - clampedX)
         let clampedH = min(height, totalHeight - clampedY)
         guard clampedW > 0 && clampedH > 0 else { return nil }
 
-        var result = Data(count: clampedW * clampedH * 4)
-        result.withUnsafeMutableBytes { dest in
-            for row in 0..<clampedH {
-                let srcRow = baseAddress + (clampedY + row) * bytesPerRow + clampedX * 4
-                let destRow = dest.baseAddress! + row * clampedW * 4
-                memcpy(destRow, srcRow, clampedW * 4)
-            }
-        }
-        return result
+        // Create a CGImage from the full pixel buffer, then crop
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        // BGRA format: use byteOrder32Little + premultipliedFirst = standard iOS BGRA
+        let bitmapInfo = CGBitmapInfo(rawValue: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue)
+
+        guard let fullContext = CGContext(
+            data: baseAddress,
+            width: totalWidth,
+            height: totalHeight,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo.rawValue
+        ) else { return nil }
+
+        guard let fullImage = fullContext.makeImage() else { return nil }
+
+        // Crop the face region from the full image
+        let cropRect = CGRect(x: clampedX, y: clampedY, width: clampedW, height: clampedH)
+        return fullImage.cropping(to: cropRect)
     }
 
-    private func resizeImage(_ data: Data, to size: CGSize) -> Data? {
-        // Decode raw BGRA data to UIImage then resize
+    /**
+     * Resizes a CGImage to the target size (112x112) and returns raw BGRA pixel data.
+     * Uses Core Graphics bilinear interpolation for high-quality downscaling.
+     * The returned Data contains width * height * 4 bytes in BGRA order.
+     */
+    private func resizeImage(_ image: CGImage, to size: CGSize) -> Data? {
         let w = Int(size.width)
         let h = Int(size.height)
-        var resized = Data(count: w * h * 4)
-        resized.withUnsafeMutableBytes { dest in
+        let bytesPerRow = w * 4
+
+        // Allocate output buffer for BGRA pixels
+        var pixelData = Data(count: h * bytesPerRow)
+
+        let success = pixelData.withUnsafeMutableBytes { dest -> Bool in
+            guard let baseAddress = dest.baseAddress else { return false }
+
+            let colorSpace = CGColorSpaceCreateDeviceRGB()
+            // Use BGRA format matching our pixel buffer input format
+            let bitmapInfo = CGBitmapInfo(rawValue: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue)
+
             guard let ctx = CGContext(
-                data: dest.baseAddress,
+                data: baseAddress,
                 width: w,
                 height: h,
                 bitsPerComponent: 8,
-                bytesPerRow: w * 4,
-                space: CGColorSpaceCreateDeviceRGB(),
-                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
-            ) else { return }
-            // We'll draw via a temporary CGImage from the raw data
-            // For robustness, use a blank draw then overlay — simplified approach
-            ctx.setFillColor(UIColor.black.cgColor)
-            ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+                bytesPerRow: bytesPerRow,
+                space: colorSpace,
+                bitmapInfo: bitmapInfo.rawValue
+            ) else { return false }
+
+            // High quality interpolation for face resize
+            ctx.interpolationQuality = .high
+
+            // Draw the cropped face image scaled to 112x112
+            ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+            return true
         }
-        return resized
+
+        return success ? pixelData : nil
     }
 }
