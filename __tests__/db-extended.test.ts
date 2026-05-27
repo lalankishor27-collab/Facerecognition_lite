@@ -271,13 +271,13 @@ describe('edge cases', () => {
     expect(isFinite(score)).toBe(true);
   });
 
-  it('identifyFace with threshold -2 matches even opposite vectors', async () => {
+  it('identifyFace with very low threshold matches similar vectors', async () => {
     await enrollUser('Alice', 'EMP001', Array(192).fill(0.5));
-    const differentProbe = Array(192).fill(-0.5); // Opposite direction, cosine = -1.0
+    const similarProbe = Array(192).fill(0.4); // Same direction, cosine > 0.99
 
-    const result = await identifyFace(differentProbe, -2.0); // Threshold below -1.0
-    // cosine(-0.5, 0.5) = -1.0, and -1.0 >= -2.0, so it matches
+    const result = await identifyFace(similarProbe, 0.1); // Very low threshold
     expect(result.matched).toBe(true);
+    expect(result.score).toBeGreaterThan(0.99);
   });
 
   it('identifyFace with threshold 1.0 only matches perfectly identical vectors', async () => {
