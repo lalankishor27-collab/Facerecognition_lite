@@ -11,6 +11,12 @@ import com.facebook.react.uimanager.ThemedReactContext;
 import java.util.HashMap;
 import java.util.Map;
 
+/**
+ * FaceCameraViewManager - React Native bridge for native FaceCameraView.
+ * 
+ * Fix #41: Overrides both receiveCommand(int) and receiveCommand(String)
+ * variants for compatibility with both Old and New Architecture.
+ */
 public class FaceCameraViewManager extends SimpleViewManager<FaceCameraView> {
     public static final String REACT_CLASS = "FaceCameraView";
     public static final int COMMAND_RESET = 1;
@@ -44,9 +50,20 @@ public class FaceCameraViewManager extends SimpleViewManager<FaceCameraView> {
         return MapBuilder.of("reset", COMMAND_RESET);
     }
 
+    // Legacy command dispatch (integer-based) for Old Architecture
     @Override
     public void receiveCommand(@NonNull FaceCameraView root, int commandId, @Nullable ReadableArray args) {
         if (commandId == COMMAND_RESET) {
+            root.resetLiveness();
+        } else {
+            super.receiveCommand(root, commandId, args);
+        }
+    }
+
+    // New Architecture command dispatch (String-based) for Fabric/TurboModules
+    @Override
+    public void receiveCommand(@NonNull FaceCameraView root, @NonNull String commandId, @Nullable ReadableArray args) {
+        if ("reset".equals(commandId)) {
             root.resetLiveness();
         } else {
             super.receiveCommand(root, commandId, args);
