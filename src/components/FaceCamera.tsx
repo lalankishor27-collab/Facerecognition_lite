@@ -34,10 +34,6 @@ import {
 
 // ─── Types ────────────────────────────────────────────────────────
 
-interface NativeEvent<T> {
-  nativeEvent: T;
-}
-
 interface FaceCameraProps {
   style?: StyleProp<ViewStyle>;
   onLivenessStarted?: (data: LivenessStartedEvent) => void;

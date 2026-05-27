@@ -8,7 +8,6 @@ import android.graphics.Rect;
 import android.media.Image;
 import android.util.AttributeSet;
 import android.util.Log;
-import android.util.Size;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
 import androidx.annotation.NonNull;
@@ -240,8 +239,8 @@ public class FaceCameraView extends FrameLayout implements LifecycleOwner {
         preview.setSurfaceProvider(previewView.getSurfaceProvider());
 
         ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
-                .setTargetResolution(new Size(640, 480))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
                 .build();
 
         imageAnalysis.setAnalyzer(analysisExecutor, imageProxy -> {
