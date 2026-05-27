@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from 'react';
+import React from 'react';
 import {
   View,
   TouchableOpacity,
@@ -7,7 +7,7 @@ import {
   StyleSheet,
   Dimensions,
 } from 'react-native';
-import { COLORS, SPACING, FONT_SIZES, FONT_WEIGHTS, BORDER_RADIUS } from '../constants/theme';
+import { COLORS, FONT_SIZES, FONT_WEIGHTS, BORDER_RADIUS } from '../constants/theme';
 import {
   LivenessStep,
   ChallengeType,
@@ -19,6 +19,7 @@ import {
 } from '../types';
 import ChallengeHUD from '../components/ChallengeHUD';
 import FaceCamera from '../components/FaceCamera';
+import FacePositionGuide from '../components/FacePositionGuide';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -55,15 +56,6 @@ const CameraScreen: React.FC<CameraScreenProps> = ({
   onCancel,
   faceCameraRef,
 }) => {
-  const isSuccess = livenessStep === 'success';
-  const isFailed = livenessStep === 'failed';
-  const isProcessing = livenessStep === 'processing' || livenessStep === 'ready';
-
-  let borderColor = COLORS.secondary;
-  if (isSuccess) borderColor = COLORS.accent;
-  if (isFailed) borderColor = COLORS.danger;
-  if (isProcessing) borderColor = COLORS.primary;
-
   return (
     <View style={styles.container}>
       <StatusBar hidden />
@@ -76,8 +68,9 @@ const CameraScreen: React.FC<CameraScreenProps> = ({
         onLivenessFailed={onLivenessFailed}
       />
 
-      <View style={[styles.borderFrame, { borderColor }]}>
-        <View style={styles.scannerLine} />
+      {/* Face Position Guide — replaces old static border frame */}
+      <View style={styles.guideContainer}>
+        <FacePositionGuide livenessStep={livenessStep} />
       </View>
 
       <ChallengeHUD
@@ -112,19 +105,8 @@ const styles = StyleSheet.create({
     width: SCREEN_WIDTH,
     height: SCREEN_HEIGHT,
   },
-  borderFrame: {
-    width: 320,
-    height: 320,
-    borderRadius: BORDER_RADIUS.circle,
-    borderWidth: 3,
-    justifyContent: 'center',
-    alignItems: 'center',
+  guideContainer: {
     transform: [{ translateY: -70 }],
-  },
-  scannerLine: {
-    width: '100%',
-    height: 2,
-    backgroundColor: 'rgba(255, 255, 255, 0.4)',
   },
   cancelButton: {
     position: 'absolute',

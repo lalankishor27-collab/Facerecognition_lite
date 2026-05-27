@@ -31,6 +31,7 @@ import {
 } from './src/context/actions';
 import DashboardScreen from './src/screens/DashboardScreen';
 import CameraScreen from './src/screens/CameraScreen';
+import AnimatedScreenTransition from './src/components/AnimatedScreenTransition';
 
 // ─── App Content (consumes context) ───────────────────────────────
 
@@ -121,40 +122,44 @@ function AppContent() {
       <StatusBar barStyle="dark-content" backgroundColor={COLORS.white} />
       <View style={styles.mainContainer}>
         {state.currentScreen === 'dashboard' ? (
-          <DashboardScreen
-            users={state.users}
-            logs={state.logs}
-            isOnline={state.isOnline}
-            isSyncing={state.isSyncing}
-            enrollName={state.enrollName}
-            enrollId={state.enrollId}
-            enrollError={state.enrollError}
-            pulseAnim={pulseAnim}
-            onToggleNetwork={handleToggleNetwork}
-            onEnrollNameChange={handleEnrollNameChange}
-            onEnrollIdChange={handleEnrollIdChange}
-            onRegister={handleRegister}
-            onAuthenticate={handleAuthenticate}
-            onSync={handleSync}
-            onClearDatabase={handleClear}
-          />
+          <AnimatedScreenTransition key="dashboard" direction="up">
+            <DashboardScreen
+              users={state.users}
+              logs={state.logs}
+              isOnline={state.isOnline}
+              isSyncing={state.isSyncing}
+              enrollName={state.enrollName}
+              enrollId={state.enrollId}
+              enrollError={state.enrollError}
+              pulseAnim={pulseAnim}
+              onToggleNetwork={handleToggleNetwork}
+              onEnrollNameChange={handleEnrollNameChange}
+              onEnrollIdChange={handleEnrollIdChange}
+              onRegister={handleRegister}
+              onAuthenticate={handleAuthenticate}
+              onSync={handleSync}
+              onClearDatabase={handleClear}
+            />
+          </AnimatedScreenTransition>
         ) : (
-          <CameraScreen
-            livenessStep={state.livenessStep}
-            livenessStatus={state.livenessStatus}
-            challenges={state.challenges}
-            currentChallengeIdx={state.currentChallengeIdx}
-            matchedUser={state.matchedUser}
-            scanResultScore={state.scanResultScore}
-            authStatusMessage={state.authStatusMessage}
-            onLivenessStarted={handleLivenessStartedCb}
-            onChallengeComplete={handleChallengeCompleteCb}
-            onLivenessSuccess={handleLivenessSuccessCb}
-            onLivenessFailed={handleLivenessFailedCb}
-            onRetry={handleRetryCb}
-            onCancel={handleCancel}
-            faceCameraRef={faceCameraRef}
-          />
+          <AnimatedScreenTransition key="camera" direction="left">
+            <CameraScreen
+              livenessStep={state.livenessStep}
+              livenessStatus={state.livenessStatus}
+              challenges={state.challenges}
+              currentChallengeIdx={state.currentChallengeIdx}
+              matchedUser={state.matchedUser}
+              scanResultScore={state.scanResultScore}
+              authStatusMessage={state.authStatusMessage}
+              onLivenessStarted={handleLivenessStartedCb}
+              onChallengeComplete={handleChallengeCompleteCb}
+              onLivenessSuccess={handleLivenessSuccessCb}
+              onLivenessFailed={handleLivenessFailedCb}
+              onRetry={handleRetryCb}
+              onCancel={handleCancel}
+              faceCameraRef={faceCameraRef}
+            />
+          </AnimatedScreenTransition>
         )}
       </View>
     </SafeAreaView>

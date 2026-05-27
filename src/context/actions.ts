@@ -16,6 +16,7 @@ import {
   identifyFace,
   clearDatabase,
 } from '../services/db';
+import { hapticTick, hapticSuccess, hapticError } from '../services/haptics';
 import {
   LivenessStartedEvent,
   ChallengeCompleteEvent,
@@ -81,6 +82,7 @@ export function handleChallengeComplete(
   dispatch: Dispatch,
   data: ChallengeCompleteEvent,
 ): void {
+  hapticTick();
   dispatch({ type: 'CHALLENGE_COMPLETE', index: data.index });
 }
 
@@ -105,6 +107,7 @@ export async function handleLivenessSuccess(
 
     const success = await enrollUser(enrollName, enrollId, embedding);
     if (success) {
+      hapticSuccess();
       dispatch({
         type: 'LIVENESS_SUCCESS',
         status: 'Face template registered successfully!',
@@ -133,6 +136,7 @@ export async function handleLivenessSuccess(
   } else if (currentScreen === 'authenticate') {
     const result = await identifyFace(embedding, 0.82);
     if (result.matched && result.user) {
+      hapticSuccess();
       dispatch({
         type: 'LIVENESS_SUCCESS',
         status: `Authenticated: ${result.user.name}`,
@@ -176,6 +180,7 @@ export function handleLivenessFailed(
   dispatch: Dispatch,
   data: LivenessFailedEvent,
 ): void {
+  hapticError();
   dispatch({
     type: 'LIVENESS_FAILED',
     status: data.error || 'Liveness check failed.',
