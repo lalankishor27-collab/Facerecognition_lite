@@ -9,6 +9,18 @@ export interface EnrolledUser {
   enrolledAt: string;
 }
 
+/**
+ * Internal storage format — embedding stored as encrypted base64 string.
+ * Decrypted to EnrolledUser at read time.
+ */
+export interface StoredUser {
+  name: string;
+  employeeId: string;
+  encryptedEmbedding: string; // AES-256-GCM encrypted base64
+  embedding?: number[];       // Legacy unencrypted (migration support)
+  enrolledAt: string;
+}
+
 export interface AttendanceLog {
   id: string;
   employeeId: string;

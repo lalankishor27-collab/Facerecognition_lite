@@ -9,10 +9,16 @@
  * - Input validation and sanitization
  * - Type safety throughout
  * - Proper error handling
+ * - AES-256-GCM encryption for biometric embedding vectors at rest
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { EnrolledUser, AttendanceLog, IdentifyResult, SyncResult } from '../types';
+import { EnrolledUser, AttendanceLog, IdentifyResult, SyncResult, StoredUser } from '../types';
 import { LIVENESS_CONFIG } from '../constants/theme';
+import {
+  encryptEmbedding,
+  decryptEmbedding,
+  isCryptoAvailable,
+} from './crypto';
 
 const USERS_KEY = '@securefaceapp_users';
 const LOGS_KEY = '@securefaceapp_logs';
@@ -107,13 +113,44 @@ export const calculateCosineSimilarity = (vecA: number[], vecB: number[]): numbe
 
 /**
  * Fetch all enrolled users from local storage.
+ * Decrypts embedding vectors from AES-256-GCM ciphertext at read time.
+ * Handles backward compatibility with legacy unencrypted data.
  */
 export const getEnrolledUsers = async (): Promise<EnrolledUser[]> => {
   try {
     const jsonValue = await AsyncStorage.getItem(USERS_KEY);
     if (!jsonValue) return [];
     const parsed = JSON.parse(jsonValue);
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) return [];
+
+    // Decrypt embeddings (handles both encrypted and legacy plain formats)
+    const users: EnrolledUser[] = [];
+    for (const stored of parsed as StoredUser[]) {
+      try {
+        let embedding: number[];
+        if (stored.encryptedEmbedding) {
+          // New encrypted format
+          embedding = await decryptEmbedding(stored.encryptedEmbedding);
+        } else if (stored.embedding && Array.isArray(stored.embedding)) {
+          // Legacy unencrypted format — still works
+          embedding = stored.embedding;
+        } else {
+          console.warn('[DB] Skipping user with no embedding:', stored.employeeId);
+          continue;
+        }
+        users.push({
+          name: stored.name,
+          employeeId: stored.employeeId,
+          embedding,
+          enrolledAt: stored.enrolledAt,
+        });
+      } catch (decryptErr) {
+        console.error('[DB] Failed to decrypt embedding for:', stored.employeeId, decryptErr);
+        // Skip corrupted entries rather than failing entirely
+        continue;
+      }
+    }
+    return users;
   } catch (e) {
     console.error('[DB] Error fetching enrolled users:', e);
     return [];
@@ -123,6 +160,7 @@ export const getEnrolledUsers = async (): Promise<EnrolledUser[]> => {
 /**
  * Enroll a new user with their face embedding vector.
  * Validates all inputs before storage.
+ * Encrypts the embedding vector with AES-256-GCM before persisting.
  */
 export const enrollUser = async (
   name: string,
@@ -147,24 +185,29 @@ export const enrollUser = async (
       return false;
     }
 
-    const users = await getEnrolledUsers();
+    // Encrypt the embedding for at-rest security
+    const encryptedEmbedding = await encryptEmbedding(embedding);
 
-    // Check if employee ID already exists (update scenario)
-    const existsIdx = users.findIndex(u => u.employeeId === sanitizedId);
-    const newUser: EnrolledUser = {
+    // Read existing stored users (raw, without decrypting all)
+    const jsonValue = await AsyncStorage.getItem(USERS_KEY);
+    const storedUsers: StoredUser[] = jsonValue ? JSON.parse(jsonValue) : [];
+
+    const newStoredUser: StoredUser = {
       name: sanitizedName,
       employeeId: sanitizedId,
-      embedding,
+      encryptedEmbedding,
       enrolledAt: new Date().toISOString(),
     };
 
+    // Check if employee ID already exists (update scenario)
+    const existsIdx = storedUsers.findIndex(u => u.employeeId === sanitizedId);
     if (existsIdx > -1) {
-      users[existsIdx] = newUser; // Update existing
+      storedUsers[existsIdx] = newStoredUser; // Update existing
     } else {
-      users.push(newUser); // Add new
+      storedUsers.push(newStoredUser); // Add new
     }
 
-    await AsyncStorage.setItem(USERS_KEY, JSON.stringify(users));
+    await AsyncStorage.setItem(USERS_KEY, JSON.stringify(storedUsers));
     return true;
   } catch (e) {
     console.error('[DB] Error enrolling user:', e);
@@ -174,16 +217,18 @@ export const enrollUser = async (
 
 /**
  * Delete a user from enrollment by employee ID.
+ * Operates directly on stored format (no decryption needed for deletion).
  */
 export const deleteUser = async (employeeId: string): Promise<boolean> => {
   try {
     const sanitizedId = sanitizeInput(employeeId, MAX_ID_LENGTH);
     if (!sanitizedId) return false;
 
-    const users = await getEnrolledUsers();
-    const filtered = users.filter(u => u.employeeId !== sanitizedId);
+    const jsonValue = await AsyncStorage.getItem(USERS_KEY);
+    const storedUsers: StoredUser[] = jsonValue ? JSON.parse(jsonValue) : [];
+    const filtered = storedUsers.filter(u => u.employeeId !== sanitizedId);
 
-    if (filtered.length === users.length) {
+    if (filtered.length === storedUsers.length) {
       console.warn('[DB] User not found for deletion:', sanitizedId);
       return false;
     }
@@ -406,10 +451,11 @@ export const syncAndPurgeLogs = async (): Promise<SyncResult> => {
 
 /**
  * Clear all local data (factory reset).
+ * Also removes the encryption key — new enrollments will generate a fresh key.
  */
 export const clearDatabase = async (): Promise<boolean> => {
   try {
-    await AsyncStorage.multiRemove([USERS_KEY, LOGS_KEY]);
+    await AsyncStorage.multiRemove([USERS_KEY, LOGS_KEY, '@securefaceapp_crypto_key']);
     return true;
   } catch (e) {
     console.error('[DB] Error clearing database:', e);
