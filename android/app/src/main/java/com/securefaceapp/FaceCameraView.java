@@ -74,6 +74,10 @@ public class FaceCameraView extends FrameLayout implements LifecycleOwner {
     private static final String TAG = "FaceCameraView";
     private static final long LIVENESS_TIMEOUT_MS = 30000; // 30 seconds
 
+    // Anti-rush constants: prevent instant pass-through
+    private static final long SETTLE_DELAY_MS = 1500;    // Wait 1.5s before checking challenges
+    private static final long MIN_HOLD_MS = 500;         // Challenge must be sustained for 500ms
+
     private PreviewView previewView;
     private FaceDetector detector;
     private Interpreter tfliteInterpreter;
@@ -86,6 +90,8 @@ public class FaceCameraView extends FrameLayout implements LifecycleOwner {
     private final AtomicBoolean isBlinkStarted = new AtomicBoolean(false);
     private final AtomicBoolean isFinished = new AtomicBoolean(false);
     private final AtomicBoolean isDestroyed = new AtomicBoolean(false);
+    private volatile boolean neutralVerified = false;    // Must see neutral face first
+    private volatile long challengeConditionMetAt = 0;   // When current challenge was first detected
 
     private long livenessStartTime = 0;
     private Runnable timeoutRunnable;
@@ -292,6 +298,8 @@ public class FaceCameraView extends FrameLayout implements LifecycleOwner {
         currentChallengeIdx.set(0);
         isBlinkStarted.set(false);
         isFinished.set(false);
+        neutralVerified = false;
+        challengeConditionMetAt = 0;
         livenessStartTime = System.currentTimeMillis();
 
         // #35 Fix: Start timeout timer
@@ -380,6 +388,33 @@ public class FaceCameraView extends FrameLayout implements LifecycleOwner {
             return;
         }
 
+        // ANTI-RUSH: Don't check challenges until settle delay has passed
+        long elapsed = System.currentTimeMillis() - livenessStartTime;
+        if (elapsed < SETTLE_DELAY_MS) {
+            imageProxy.close();
+            return;
+        }
+
+        // NEUTRAL CHECK: Before starting challenges, verify face is in neutral state
+        // (eyes open, not smiling, facing forward) to prevent accidental instant-pass
+        if (!neutralVerified) {
+            Float leftEye = face.getLeftEyeOpenProbability();
+            Float rightEye = face.getRightEyeOpenProbability();
+            Float smile = face.getSmilingProbability();
+            float yaw = face.getHeadEulerAngleY();
+
+            boolean eyesOpen = (leftEye != null && rightEye != null && leftEye > 0.5f && rightEye > 0.5f);
+            boolean notSmiling = (smile != null && smile < 0.4f);
+            boolean facingForward = (Math.abs(yaw) < 10.0f);
+
+            if (eyesOpen && notSmiling && facingForward) {
+                neutralVerified = true;
+            } else {
+                imageProxy.close();
+                return; // Wait for neutral state
+            }
+        }
+
         int challengeIdx = currentChallengeIdx.get();
         if (challengeIdx < activeChallenges.size()) {
             String currentChallenge = activeChallenges.get(challengeIdx);
@@ -418,6 +453,21 @@ public class FaceCameraView extends FrameLayout implements LifecycleOwner {
             }
 
             if (passed) {
+                // SUSTAINED HOLD: Challenge must be held for MIN_HOLD_MS
+                long now = System.currentTimeMillis();
+                if (challengeConditionMetAt == 0) {
+                    // First frame where condition is met — start timer
+                    challengeConditionMetAt = now;
+                    imageProxy.close();
+                    return;
+                } else if (now - challengeConditionMetAt < MIN_HOLD_MS) {
+                    // Condition met but not held long enough yet
+                    imageProxy.close();
+                    return;
+                }
+                // Condition sustained for MIN_HOLD_MS — challenge passed!
+                challengeConditionMetAt = 0; // Reset for next challenge
+
                 WritableMap event = Arguments.createMap();
                 event.putString("challenge", currentChallenge);
                 event.putInt("index", challengeIdx);
@@ -425,6 +475,9 @@ public class FaceCameraView extends FrameLayout implements LifecycleOwner {
 
                 currentChallengeIdx.incrementAndGet();
                 isBlinkStarted.set(false);
+            } else {
+                // Condition NOT met — reset the hold timer
+                challengeConditionMetAt = 0;
             }
 
             imageProxy.close();

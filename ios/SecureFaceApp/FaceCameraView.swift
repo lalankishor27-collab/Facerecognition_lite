@@ -46,12 +46,17 @@ class FaceCameraView: UIView {
     private var isDestroyed: Bool = false
     private var livenessTimer: Timer?
     private let stateLock = NSLock()
+    private var neutralVerified: Bool = false           // Must see neutral face first
+    private var challengeConditionMetAt: TimeInterval = 0 // When challenge was first detected
 
     private static let livenessTimeoutSeconds: TimeInterval = 30.0
+    private static let settleDelaySeconds: TimeInterval = 1.5  // Wait before checking
+    private static let minHoldSeconds: TimeInterval = 0.5      // Challenge must sustain
     private static let modelFileName = "mobilefacenet_tuned"
     private static let modelFileExtension = "tflite"
     private static let inputSize: Int = 112
     private static let embeddingSize: Int = 192
+    private var livenessStartedAt: TimeInterval = 0
 
     // MARK: - Init
 
@@ -194,6 +199,9 @@ class FaceCameraView: UIView {
         currentChallengeIdx = 0
         isBlinkStarted = false
         isFinished = false
+        neutralVerified = false
+        challengeConditionMetAt = 0
+        livenessStartedAt = Date().timeIntervalSince1970
         stateLock.unlock()
 
         startTimeout()
@@ -319,10 +327,39 @@ extension FaceCameraView: AVCaptureVideoDataOutputSampleBufferDelegate {
         let destroyed = isDestroyed
         var challengeIdx = currentChallengeIdx
         let challenges = activeChallenges
+        let startedAt = livenessStartedAt
+        var isNeutralOk = neutralVerified
         stateLock.unlock()
 
         guard !finished && !destroyed else { return }
         guard let landmarks = face.landmarks else { return }
+
+        // ANTI-RUSH: Don't check challenges until settle delay has passed
+        let elapsed = Date().timeIntervalSince1970 - startedAt
+        if elapsed < FaceCameraView.settleDelaySeconds {
+            return
+        }
+
+        // NEUTRAL CHECK: Before starting challenges, verify face is neutral
+        if !isNeutralOk {
+            let leftEyeOpen = estimateEyeOpenness(landmarks.leftEye)
+            let rightEyeOpen = estimateEyeOpenness(landmarks.rightEye)
+            let smileScore = estimateSmile(landmarks.outerLips)
+            let yaw = face.yaw?.floatValue ?? 0
+
+            let eyesOpen = leftEyeOpen > 0.5 && rightEyeOpen > 0.5
+            let notSmiling = smileScore < 0.4
+            let facingForward = abs(yaw) < 0.18 // ~10 degrees in radians
+
+            if eyesOpen && notSmiling && facingForward {
+                stateLock.lock()
+                neutralVerified = true
+                stateLock.unlock()
+                isNeutralOk = true
+            } else {
+                return // Wait for neutral state
+            }
+        }
 
         if challengeIdx < challenges.count {
             let challenge = challenges[challengeIdx]
@@ -365,16 +402,35 @@ extension FaceCameraView: AVCaptureVideoDataOutputSampleBufferDelegate {
             }
 
             if passed {
+                // SUSTAINED HOLD: Challenge must be held for minHoldSeconds
+                let now = Date().timeIntervalSince1970
                 stateLock.lock()
+                if challengeConditionMetAt == 0 {
+                    // First frame where condition met — start timer
+                    challengeConditionMetAt = now
+                    stateLock.unlock()
+                    return
+                } else if now - challengeConditionMetAt < FaceCameraView.minHoldSeconds {
+                    // Condition met but not held long enough
+                    stateLock.unlock()
+                    return
+                }
+                // Sustained for minHoldSeconds — challenge passed!
                 currentChallengeIdx += 1
                 challengeIdx = currentChallengeIdx
                 isBlinkStarted = false
+                challengeConditionMetAt = 0 // Reset for next challenge
                 stateLock.unlock()
 
                 onChallengeComplete?([
                     "challenge": challenge,
                     "index": challengeIdx - 1
                 ])
+            } else {
+                // Condition NOT met — reset the hold timer
+                stateLock.lock()
+                challengeConditionMetAt = 0
+                stateLock.unlock()
             }
         } else {
             // All challenges passed — check face is roughly frontal before capture
