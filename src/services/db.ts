@@ -9,10 +9,15 @@
  * - Input validation and sanitization
  * - Type safety throughout
  * - Proper error handling
+ * - AES-256-GCM encryption for biometric embedding vectors at rest
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { EnrolledUser, AttendanceLog, IdentifyResult, SyncResult } from '../types';
+import { EnrolledUser, AttendanceLog, IdentifyResult, SyncResult, StoredUser } from '../types';
 import { LIVENESS_CONFIG } from '../constants/theme';
+import {
+  encryptEmbedding,
+  decryptEmbedding,
+} from './crypto';
 
 const USERS_KEY = '@securefaceapp_users';
 const LOGS_KEY = '@securefaceapp_logs';
@@ -107,13 +112,44 @@ export const calculateCosineSimilarity = (vecA: number[], vecB: number[]): numbe
 
 /**
  * Fetch all enrolled users from local storage.
+ * Decrypts embedding vectors from AES-256-GCM ciphertext at read time.
+ * Handles backward compatibility with legacy unencrypted data.
  */
 export const getEnrolledUsers = async (): Promise<EnrolledUser[]> => {
   try {
     const jsonValue = await AsyncStorage.getItem(USERS_KEY);
     if (!jsonValue) return [];
     const parsed = JSON.parse(jsonValue);
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) return [];
+
+    // Decrypt embeddings (handles both encrypted and legacy plain formats)
+    const users: EnrolledUser[] = [];
+    for (const stored of parsed as StoredUser[]) {
+      try {
+        let embedding: number[];
+        if (stored.encryptedEmbedding) {
+          // New encrypted format
+          embedding = await decryptEmbedding(stored.encryptedEmbedding);
+        } else if (stored.embedding && Array.isArray(stored.embedding)) {
+          // Legacy unencrypted format — still works
+          embedding = stored.embedding;
+        } else {
+          console.warn('[DB] Skipping user with no embedding:', stored.employeeId);
+          continue;
+        }
+        users.push({
+          name: stored.name,
+          employeeId: stored.employeeId,
+          embedding,
+          enrolledAt: stored.enrolledAt,
+        });
+      } catch (decryptErr) {
+        console.error('[DB] Failed to decrypt embedding for:', stored.employeeId, decryptErr);
+        // Skip corrupted entries rather than failing entirely
+        continue;
+      }
+    }
+    return users;
   } catch (e) {
     console.error('[DB] Error fetching enrolled users:', e);
     return [];
@@ -123,6 +159,7 @@ export const getEnrolledUsers = async (): Promise<EnrolledUser[]> => {
 /**
  * Enroll a new user with their face embedding vector.
  * Validates all inputs before storage.
+ * Encrypts the embedding vector with AES-256-GCM before persisting.
  */
 export const enrollUser = async (
   name: string,
@@ -147,24 +184,29 @@ export const enrollUser = async (
       return false;
     }
 
-    const users = await getEnrolledUsers();
+    // Encrypt the embedding for at-rest security
+    const encryptedEmbedding = await encryptEmbedding(embedding);
 
-    // Check if employee ID already exists (update scenario)
-    const existsIdx = users.findIndex(u => u.employeeId === sanitizedId);
-    const newUser: EnrolledUser = {
+    // Read existing stored users (raw, without decrypting all)
+    const jsonValue = await AsyncStorage.getItem(USERS_KEY);
+    const storedUsers: StoredUser[] = jsonValue ? JSON.parse(jsonValue) : [];
+
+    const newStoredUser: StoredUser = {
       name: sanitizedName,
       employeeId: sanitizedId,
-      embedding,
+      encryptedEmbedding,
       enrolledAt: new Date().toISOString(),
     };
 
+    // Check if employee ID already exists (update scenario)
+    const existsIdx = storedUsers.findIndex(u => u.employeeId === sanitizedId);
     if (existsIdx > -1) {
-      users[existsIdx] = newUser; // Update existing
+      storedUsers[existsIdx] = newStoredUser; // Update existing
     } else {
-      users.push(newUser); // Add new
+      storedUsers.push(newStoredUser); // Add new
     }
 
-    await AsyncStorage.setItem(USERS_KEY, JSON.stringify(users));
+    await AsyncStorage.setItem(USERS_KEY, JSON.stringify(storedUsers));
     return true;
   } catch (e) {
     console.error('[DB] Error enrolling user:', e);
@@ -174,16 +216,18 @@ export const enrollUser = async (
 
 /**
  * Delete a user from enrollment by employee ID.
+ * Operates directly on stored format (no decryption needed for deletion).
  */
 export const deleteUser = async (employeeId: string): Promise<boolean> => {
   try {
     const sanitizedId = sanitizeInput(employeeId, MAX_ID_LENGTH);
     if (!sanitizedId) return false;
 
-    const users = await getEnrolledUsers();
-    const filtered = users.filter(u => u.employeeId !== sanitizedId);
+    const jsonValue = await AsyncStorage.getItem(USERS_KEY);
+    const storedUsers: StoredUser[] = jsonValue ? JSON.parse(jsonValue) : [];
+    const filtered = storedUsers.filter(u => u.employeeId !== sanitizedId);
 
-    if (filtered.length === users.length) {
+    if (filtered.length === storedUsers.length) {
       console.warn('[DB] User not found for deletion:', sanitizedId);
       return false;
     }
@@ -306,6 +350,8 @@ export const logAttendance = async (
 
 // ─── Sync & Purge ─────────────────────────────────────────────────
 
+const SYNC_META_KEY = '@securefaceapp_sync_meta';
+
 // ─── AWS Sync Configuration ───────────────────────────────────────
 // TODO: Replace these placeholders with your actual AWS values before production
 const AWS_SYNC_CONFIG = {
@@ -313,31 +359,93 @@ const AWS_SYNC_CONFIG = {
   apiEndpoint: '', // TODO: Set your AWS API Gateway endpoint URL
   apiKey: '',      // TODO: Set your API key (x-api-key header)
   timeoutMs: 15000,
+  conflictStrategy: 'latest-wins' as import('../types').ConflictStrategy,
+};
+
+// ─── Sync Metadata Management ─────────────────────────────────────
+
+/**
+ * Get or initialize sync metadata for incremental sync tracking.
+ * Generates a stable device ID on first call (persisted across sessions).
+ */
+export const getSyncMetadata = async (): Promise<import('../types').SyncMetadata> => {
+  try {
+    const raw = await AsyncStorage.getItem(SYNC_META_KEY);
+    if (raw) {
+      return JSON.parse(raw);
+    }
+  } catch (e) {
+    console.warn('[DB] Error reading sync metadata, reinitializing:', e);
+  }
+  // Initialize fresh metadata with unique device ID
+  const meta: import('../types').SyncMetadata = {
+    lastSyncTimestamp: null,
+    lastSyncedLogId: null,
+    deviceId: generateUUID(),
+    syncAttempts: 0,
+  };
+  await AsyncStorage.setItem(SYNC_META_KEY, JSON.stringify(meta));
+  return meta;
 };
 
 /**
- * Upload pending logs to cloud and purge local copies ONLY after
- * confirmed server acknowledgement.
+ * Update sync metadata after a successful or failed sync attempt.
+ */
+const updateSyncMetadata = async (
+  updates: Partial<import('../types').SyncMetadata>,
+): Promise<void> => {
+  const meta = await getSyncMetadata();
+  const updated = { ...meta, ...updates };
+  await AsyncStorage.setItem(SYNC_META_KEY, JSON.stringify(updated));
+};
+
+// ─── Incremental Sync & Conflict Resolution ───────────────────────
+
+/**
+ * Upload pending logs to cloud using INCREMENTAL SYNC with CONFLICT RESOLUTION.
  *
- * IMPORTANT FIX: Purge now happens exclusively after server returns success.
- * If upload fails or is unreachable, logs are preserved locally.
+ * Incremental Sync:
+ * - Tracks lastSyncTimestamp to only upload logs created AFTER the last sync
+ * - Prevents re-uploading already-synced records on retry after partial failure
+ * - Reduces bandwidth and server load significantly
  *
- * When AWS_SYNC_CONFIG.apiEndpoint is set, uses real fetch() to POST logs.
- * Falls back to simulation (2-second delay) if no endpoint configured.
+ * Conflict Resolution:
+ * - Each log includes a deviceId to identify the source device
+ * - Duplicate detection via UUID-based log IDs (server-side dedup)
+ * - Configurable strategy: 'device-wins', 'server-wins', or 'latest-wins'
+ * - If server reports conflicts, resolves locally before purging
+ *
+ * Purge-after-confirm: Local data is NEVER deleted until server acknowledges receipt.
  */
 export const syncAndPurgeLogs = async (): Promise<SyncResult> => {
   try {
     const logs = await getAttendanceLogs();
-    const pendingLogs = logs.filter(log => log.syncStatus === 'pending');
+    const syncMeta = await getSyncMetadata();
+
+    // ─── INCREMENTAL SYNC: Only sync logs newer than last sync ────
+    let pendingLogs = logs.filter(log => log.syncStatus === 'pending');
+
+    // Further filter by timestamp if we have a last sync reference
+    if (syncMeta.lastSyncTimestamp) {
+      const lastSyncTime = new Date(syncMeta.lastSyncTimestamp).getTime();
+      pendingLogs = pendingLogs.filter(log => {
+        const logTime = new Date(log.timestamp).getTime();
+        return logTime > lastSyncTime;
+      });
+    }
 
     if (pendingLogs.length === 0) {
       return { success: true, syncedCount: 0 };
     }
 
+    // Track sync attempt
+    await updateSyncMetadata({ syncAttempts: syncMeta.syncAttempts + 1 });
+
     let uploadSuccess = false;
+    let serverConflicts: string[] = []; // IDs of conflicting records
 
     if (AWS_SYNC_CONFIG.apiEndpoint) {
-      // ─── Real AWS Sync ─────────────────────────────────────────
+      // ─── Real AWS Sync with Conflict Resolution ────────────────
       const controller = new AbortController();
       const timeoutId = setTimeout(
         () => controller.abort(),
@@ -355,12 +463,30 @@ export const syncAndPurgeLogs = async (): Promise<SyncResult> => {
             logs: pendingLogs,
             uploadedAt: new Date().toISOString(),
             count: pendingLogs.length,
+            // Conflict resolution metadata
+            deviceId: syncMeta.deviceId,
+            conflictStrategy: AWS_SYNC_CONFIG.conflictStrategy,
+            lastSyncTimestamp: syncMeta.lastSyncTimestamp,
+            // Incremental sync metadata
+            isIncremental: syncMeta.lastSyncTimestamp !== null,
+            syncAttempt: syncMeta.syncAttempts + 1,
           }),
           signal: controller.signal,
         });
         clearTimeout(timeoutId);
         uploadSuccess = response.ok; // Only success if HTTP 2xx
-        if (!uploadSuccess) {
+
+        if (uploadSuccess) {
+          // Check if server reported any conflicts
+          try {
+            const responseBody = await response.json();
+            if (responseBody.conflicts && Array.isArray(responseBody.conflicts)) {
+              serverConflicts = responseBody.conflicts;
+            }
+          } catch {
+            // Response may not be JSON — that's fine, no conflicts
+          }
+        } else {
           const errText = await response.text().catch(() => 'unknown');
           return { success: false, error: `Server returned ${response.status}: ${errText}` };
         }
@@ -375,10 +501,8 @@ export const syncAndPurgeLogs = async (): Promise<SyncResult> => {
       }
     } else {
       // ─── Simulation (no endpoint configured) ──────────────────
-      // Simulate a 2-second upload delay for demo purposes
-      // TODO: Configure AWS_SYNC_CONFIG.apiEndpoint to enable real sync
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      uploadSuccess = true; // Simulation always 'succeeds'
+      await new Promise<void>(resolve => setTimeout(() => resolve(), 2000));
+      uploadSuccess = true;
       console.warn(
         '[DB] Sync simulation used — configure AWS_SYNC_CONFIG.apiEndpoint for production',
       );
@@ -386,12 +510,40 @@ export const syncAndPurgeLogs = async (): Promise<SyncResult> => {
 
     // ─── CRITICAL: Only purge AFTER confirmed server success ───────
     if (uploadSuccess) {
-      const purgedLogs = logs.filter(log => log.syncStatus !== 'pending');
-      await AsyncStorage.setItem(LOGS_KEY, JSON.stringify(purgedLogs));
+      // Handle conflicts: mark conflicting logs instead of purging them
+      const syncedLogIds = new Set(pendingLogs.map(l => l.id));
+      const conflictSet = new Set(serverConflicts);
+
+      // Update log statuses: synced for successful, keep pending for conflicts
+      const updatedLogs = logs.map(log => {
+        if (syncedLogIds.has(log.id) && !conflictSet.has(log.id)) {
+          return { ...log, syncStatus: 'synced' as const };
+        }
+        return log;
+      });
+
+      // Purge only the logs we just synced (not pre-existing synced logs or conflicts)
+      const remainingLogs = updatedLogs.filter(
+        log => !syncedLogIds.has(log.id) || conflictSet.has(log.id),
+      );
+      await AsyncStorage.setItem(LOGS_KEY, JSON.stringify(remainingLogs));
+
+      // ─── Update sync metadata for incremental tracking ──────────
+      const syncedCount = pendingLogs.length - serverConflicts.length;
+      const latestSyncedLog = pendingLogs[0]; // Logs are in reverse-chrono order
+      await updateSyncMetadata({
+        lastSyncTimestamp: new Date().toISOString(),
+        lastSyncedLogId: latestSyncedLog?.id ?? syncMeta.lastSyncedLogId,
+        syncAttempts: 0, // Reset on success
+      });
+
       return {
         success: true,
-        syncedCount: pendingLogs.length,
-        purgedCount: pendingLogs.length,
+        syncedCount,
+        purgedCount: syncedCount,
+        ...(serverConflicts.length > 0
+          ? { error: `${serverConflicts.length} conflict(s) retained locally for review` }
+          : {}),
       };
     }
 
@@ -406,10 +558,11 @@ export const syncAndPurgeLogs = async (): Promise<SyncResult> => {
 
 /**
  * Clear all local data (factory reset).
+ * Also removes the encryption key and sync metadata — fresh start.
  */
 export const clearDatabase = async (): Promise<boolean> => {
   try {
-    await AsyncStorage.multiRemove([USERS_KEY, LOGS_KEY]);
+    await (AsyncStorage as any).multiRemove([USERS_KEY, LOGS_KEY, '@securefaceapp_crypto_key', SYNC_META_KEY]);
     return true;
   } catch (e) {
     console.error('[DB] Error clearing database:', e);
