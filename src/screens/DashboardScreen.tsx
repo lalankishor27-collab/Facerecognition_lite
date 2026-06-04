@@ -73,10 +73,11 @@ const DashboardScreen: React.FC<DashboardScreenProps> = ({
   }, []);
 
   // ─── PIN-protected action wrapper ─────────────────────────────
-  const requirePin = useCallback((action: () => void) => {
+  const requirePin = useCallback(async (action: () => void) => {
     setPinError('');
     setPendingAction(() => action);
-    setPinMode('verify');
+    const configured = await isPinConfigured();
+    setPinMode(configured ? 'verify' : 'setup');
     setShowPinModal(true);
   }, []);
 

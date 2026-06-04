@@ -17,6 +17,7 @@ import { LIVENESS_CONFIG } from '../constants/theme';
 import {
   encryptEmbedding,
   decryptEmbedding,
+  clearCachedKey,
 } from './crypto';
 
 const USERS_KEY = '@securefaceapp_users';
@@ -567,9 +568,13 @@ export const clearDatabase = async (): Promise<boolean> => {
       LOGS_KEY,
       '@securefaceapp_crypto_key',
       SYNC_META_KEY,
+      '@securefaceapp_admin_pin_hash',
+      '@securefaceapp_admin_lockout',
     ];
     // Use individual removeItem calls to guarantee each key is deleted
     await Promise.all(keysToRemove.map(key => AsyncStorage.removeItem(key)));
+    // Reset the in-memory cached encryption key to prevent key discrepancy
+    clearCachedKey();
     return true;
   } catch (e) {
     console.error('[DB] Error clearing database:', e);
