@@ -203,6 +203,10 @@ adb devices
 > Without this step you will get **"Unable to load script"** on physical devices.
 
 ```bash
+# Windows
+npx react-native bundle --platform android --dev false --entry-file index.js --bundle-output android/app/src/main/assets/index.android.bundle --assets-dest android/app/src/main/res
+
+
 # macOS / Linux
 npx react-native bundle \
   --platform android \
@@ -211,8 +215,6 @@ npx react-native bundle \
   --bundle-output android/app/src/main/assets/index.android.bundle \
   --assets-dest android/app/src/main/res
 
-# Windows
-npx react-native bundle --platform android --dev false --entry-file index.js --bundle-output android/app/src/main/assets/index.android.bundle --assets-dest android/app/src/main/res
 ```
 
 ---
@@ -220,11 +222,11 @@ npx react-native bundle --platform android --dev false --entry-file index.js --b
 ### Step 5 — Build the APK
 
 ```bash
-# macOS / Linux
-cd android && ./gradlew assembleDebug && cd ..
-
 # Windows
 cd android && gradlew assembleDebug && cd..
+
+# macOS / Linux
+cd android && ./gradlew assembleDebug && cd ..
 ```
 
 > First build: 5–10 minutes (downloads Gradle + compiles native code).
