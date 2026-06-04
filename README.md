@@ -177,11 +177,8 @@ sdk.dir=/Users/<your-username>/Library/Android/sdk
 **Quick way to create it via command line:**
 
 ```bash
-# Windows (CMD) — replace lalan with your username
-echo sdk.dir=C\:\\Users\\lalan\\AppData\\Local\\Android\\Sdk > android\local.properties
-
-# Windows (PowerShell) — replace lalan with your username
-"sdk.dir=C\:\\Users\\lalan\\AppData\\Local\\Android\\Sdk" | Out-File -FilePath android\local.properties -Encoding ascii
+# Windows (CMD) — replace your-username with your username
+echo sdk.dir=C\:\\Users\\your-username\\AppData\\Local\\Android\\Sdk > android\local.properties
 
 # macOS / Linux — replace your-username
 echo "sdk.dir=/Users/your-username/Library/Android/sdk" > android/local.properties
