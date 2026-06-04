@@ -562,7 +562,14 @@ export const syncAndPurgeLogs = async (): Promise<SyncResult> => {
  */
 export const clearDatabase = async (): Promise<boolean> => {
   try {
-    await (AsyncStorage as any).multiRemove([USERS_KEY, LOGS_KEY, '@securefaceapp_crypto_key', SYNC_META_KEY]);
+    const keysToRemove = [
+      USERS_KEY,
+      LOGS_KEY,
+      '@securefaceapp_crypto_key',
+      SYNC_META_KEY,
+    ];
+    // Use individual removeItem calls to guarantee each key is deleted
+    await Promise.all(keysToRemove.map(key => AsyncStorage.removeItem(key)));
     return true;
   } catch (e) {
     console.error('[DB] Error clearing database:', e);

@@ -98,7 +98,7 @@ const FacePositionGuide: React.FC<FacePositionGuideProps> = ({ livenessStep }) =
       borderColor = COLORS.primary;
   }
 
-  // Interpolate glow shadow
+  // Interpolate glow shadow — must use JS driver (shadow props not supported by native driver)
   const shadowOpacity = glowAnim.interpolate({
     inputRange: [0, 1],
     outputRange: [0, 0.6],
@@ -109,6 +109,9 @@ const FacePositionGuide: React.FC<FacePositionGuideProps> = ({ livenessStep }) =
     outputRange: [0, 20],
   });
 
+  // IMPORTANT: Split into two Animated.Views to avoid useNativeDriver conflict:
+  // - Outer view: shadow animation (useNativeDriver: false — JS driver required for shadow props)
+  // - Inner view: scale/transform animation (useNativeDriver: true — native driver for performance)
   return (
     <Animated.View
       style={[
@@ -117,26 +120,34 @@ const FacePositionGuide: React.FC<FacePositionGuideProps> = ({ livenessStep }) =
           borderColor,
           borderWidth,
           opacity,
-          transform: [{ scale: pulseAnim }],
           shadowColor: borderColor,
           shadowOpacity: shadowOpacity as any,
           shadowRadius: shadowRadius as any,
         },
       ]}
     >
-      {/* Corner markers for visual guidance */}
-      <View style={[styles.corner, styles.cornerTopLeft, { borderColor }]} />
-      <View style={[styles.corner, styles.cornerTopRight, { borderColor }]} />
-      <View style={[styles.corner, styles.cornerBottomLeft, { borderColor }]} />
-      <View style={[styles.corner, styles.cornerBottomRight, { borderColor }]} />
+      <Animated.View
+        style={[
+          styles.innerGuide,
+          {
+            transform: [{ scale: pulseAnim }],
+          },
+        ]}
+      >
+        {/* Corner markers for visual guidance */}
+        <View style={[styles.corner, styles.cornerTopLeft, { borderColor }]} />
+        <View style={[styles.corner, styles.cornerTopRight, { borderColor }]} />
+        <View style={[styles.corner, styles.cornerBottomLeft, { borderColor }]} />
+        <View style={[styles.corner, styles.cornerBottomRight, { borderColor }]} />
 
-      {/* Center crosshair (subtle) */}
-      {livenessStep === 'ready' && (
-        <View style={styles.crosshairContainer}>
-          <View style={styles.crosshairH} />
-          <View style={styles.crosshairV} />
-        </View>
-      )}
+        {/* Center crosshair (subtle) */}
+        {livenessStep === 'ready' && (
+          <View style={styles.crosshairContainer}>
+            <View style={styles.crosshairH} />
+            <View style={styles.crosshairV} />
+          </View>
+        )}
+      </Animated.View>
     </Animated.View>
   );
 };
@@ -152,6 +163,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     shadowOffset: { width: 0, height: 0 },
     elevation: 0,
+  },
+  innerGuide: {
+    width: '100%',
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   corner: {
     position: 'absolute',
