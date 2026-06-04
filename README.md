@@ -160,14 +160,31 @@ npm install
 
 ### Step 2 — Create `android/local.properties`
 
-> This file is gitignored. Every teammate must create it manually.
+> ⚠️ This file is gitignored. Every teammate must create it manually — do **not** run this as a command!
+
+**Create the file** `android/local.properties` using any text editor (Notepad, VS Code, etc.) with this content:
 
 ```
-# Windows
+# Windows — replace <your-username> with your actual Windows username
 sdk.dir=C\:\\Users\\<your-username>\\AppData\\Local\\Android\\Sdk
+```
 
-# macOS / Linux
+```
+# macOS / Linux — replace <your-username> with your actual username
 sdk.dir=/Users/<your-username>/Library/Android/sdk
+```
+
+**Quick way to create it via command line:**
+
+```bash
+# Windows (CMD) — replace lalan with your username
+echo sdk.dir=C\:\\Users\\lalan\\AppData\\Local\\Android\\Sdk > android\local.properties
+
+# Windows (PowerShell) — replace lalan with your username
+"sdk.dir=C\:\\Users\\lalan\\AppData\\Local\\Android\\Sdk" | Out-File -FilePath android\local.properties -Encoding ascii
+
+# macOS / Linux — replace your-username
+echo "sdk.dir=/Users/your-username/Library/Android/sdk" > android/local.properties
 ```
 
 ---
