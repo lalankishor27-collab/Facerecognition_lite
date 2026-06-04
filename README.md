@@ -141,61 +141,133 @@ graph TD
 | Tool | Version | Purpose |
 |------|---------|---------|
 | Node.js | >= 22.11.0 | JavaScript runtime |
-| JDK | 17 | Android compilation |
+| JDK | 17+ | Android compilation |
 | Android Studio | Latest | Android SDK & emulator |
 | Xcode | 15+ | iOS compilation (macOS only) |
-| CocoaPods | >= 1.14 | iOS native dependencies |
-| React Native CLI | 0.85.x | Build toolchain |
+| CocoaPods | >= 1.14 | iOS native dependencies (iOS only) |
 
-### Installation
+---
+
+### Step 1 — Clone & Install
 
 ```bash
-# 1. Clone the repository
 git clone https://github.com/lalankishor27-collab/Facerecognition_lite.git
 cd Facerecognition_lite
-
-# 2. Install JavaScript dependencies
 npm install
-
-# 3. iOS only - Install CocoaPods
-cd ios && pod install && cd ..
 ```
 
-### Run on Android
+---
+
+### Step 2 — Create `android/local.properties`
+
+> This file is gitignored. Every teammate must create it manually.
+
+```
+# Windows
+sdk.dir=C\:\\Users\\<your-username>\\AppData\\Local\\Android\\Sdk
+
+# macOS / Linux
+sdk.dir=/Users/<your-username>/Library/Android/sdk
+```
+
+---
+
+### Step 3 — Connect Your Android Device
+
+Enable **USB Debugging** on your phone: Settings → Developer Options → USB Debugging.
+Then plug it in via USB and verify:
+
+```bash
+adb devices
+# Should show: <DEVICE_ID>   device
+```
+
+---
+
+### Step 4 — Bundle the JavaScript ⚠️ Do Not Skip
+
+> Without this step you will get **"Unable to load script"** on physical devices.
+
+```bash
+# macOS / Linux
+npx react-native bundle \
+  --platform android \
+  --dev false \
+  --entry-file index.js \
+  --bundle-output android/app/src/main/assets/index.android.bundle \
+  --assets-dest android/app/src/main/res
+
+# Windows (PowerShell)
+npx react-native bundle --platform android --dev false --entry-file index.js --bundle-output android/app/src/main/assets/index.android.bundle --assets-dest android/app/src/main/res
+```
+
+---
+
+### Step 5 — Build the APK
+
+```bash
+# macOS / Linux
+cd android && ./gradlew assembleDebug && cd ..
+
+# Windows (PowerShell)
+cd android; .\gradlew assembleDebug; cd ..
+```
+
+> First build: 5–10 minutes (downloads Gradle + compiles native code).
+> Subsequent builds: ~8 seconds (incremental).
+
+APK output: `android/app/build/outputs/apk/debug/app-arm64-v8a-debug.apk`
+
+---
+
+### Step 6 — Install & Launch
+
+```bash
+# Install APK on connected device
+adb install -r android/app/build/outputs/apk/debug/app-arm64-v8a-debug.apk
+
+# Launch the app
+adb shell am start -n com.securefaceapp/.MainActivity
+```
+
+---
+
+### Run on iOS (macOS only)
 
 ```bash
 # Start Metro bundler (Terminal 1)
 npx react-native start
 
-# Build & deploy (Terminal 2)
-npm run android
-
-# Or target a specific device
-npx react-native run-android --deviceId <DEVICE_ID>
-```
-
-### Run on iOS
-
-```bash
-# Start Metro bundler (Terminal 1)
-npx react-native start
-
-# Build & deploy (Terminal 2)
+# Build & run on simulator (Terminal 2)
 npm run ios
 
-# Or specify simulator
+# Or target a specific simulator
 npx react-native run-ios --simulator="iPhone 15 Pro"
 ```
+
+---
 
 ### Run Tests
 
 ```bash
-# Run full test suite (database, similarity, integration)
+# Full test suite
 npm test
 
-# Run with coverage
+# With coverage report
 npx jest --coverage
 ```
+
+---
+
+### Troubleshooting
+
+| Problem | Fix |
+|---------|-----|
+| `adb devices` shows nothing | Re-enable USB Debugging, try another cable or USB port |
+| `SDK location not found` | Create `android/local.properties` (Step 2) |
+| "Unable to load script" | You skipped Step 4 — run the bundle command first |
+| Gradle build fails | Run `cd android && ./gradlew clean` then retry Step 5 |
+| Gradle silent for 5+ min | It is downloading dependencies — wait, do not cancel |
 
 ---
 
