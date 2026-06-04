@@ -49,6 +49,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Random;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -85,7 +86,7 @@ public class FaceCameraView extends FrameLayout implements LifecycleOwner {
     private LifecycleRegistry lifecycleRegistry;
     private ExecutorService analysisExecutor;
 
-    private final List<String> activeChallenges = new ArrayList<>();
+    private final List<String> activeChallenges = new CopyOnWriteArrayList<>();
     private final AtomicInteger currentChallengeIdx = new AtomicInteger(0);
     private final AtomicBoolean isBlinkStarted = new AtomicBoolean(false);
     private final AtomicBoolean isFinished = new AtomicBoolean(false);
@@ -388,6 +389,12 @@ public class FaceCameraView extends FrameLayout implements LifecycleOwner {
             return;
         }
 
+        // Avoid race condition: do not process frames if challenges are not initialized yet
+        if (activeChallenges.isEmpty()) {
+            imageProxy.close();
+            return;
+        }
+
         // ANTI-RUSH: Don't check challenges until settle delay has passed
         long elapsed = System.currentTimeMillis() - livenessStartTime;
         if (elapsed < SETTLE_DELAY_MS) {
@@ -616,6 +623,7 @@ public class FaceCameraView extends FrameLayout implements LifecycleOwner {
 
     public void resetLiveness() {
         isFinished.set(false);
+        activeChallenges.clear(); // Clear immediately to block analysis during reset phase
         cancelTimeout();
         post(this::initChallenges);
     }
