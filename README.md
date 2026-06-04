@@ -174,6 +174,9 @@ sdk.dir=C\:\\Users\\<your-username>\\AppData\\Local\\Android\\Sdk
 sdk.dir=/Users/<your-username>/Library/Android/sdk
 ```
 
+> [!IMPORTANT]
+> **No Trailing Spaces:** Make sure there are **no trailing spaces** at the end of the `sdk.dir` line. Trailing spaces inside `local.properties` are treated literally by Gradle, which will cause compilation to fail with `"NDK is not installed"` or path-resolution errors.
+
 **Quick way to create it via command line:**
 
 ```bash
