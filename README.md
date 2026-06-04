@@ -214,7 +214,7 @@ npx react-native bundle \
   --bundle-output android/app/src/main/assets/index.android.bundle \
   --assets-dest android/app/src/main/res
 
-# Windows (PowerShell)
+# Windows
 npx react-native bundle --platform android --dev false --entry-file index.js --bundle-output android/app/src/main/assets/index.android.bundle --assets-dest android/app/src/main/res
 ```
 
@@ -226,8 +226,8 @@ npx react-native bundle --platform android --dev false --entry-file index.js --b
 # macOS / Linux
 cd android && ./gradlew assembleDebug && cd ..
 
-# Windows (PowerShell)
-cd android; .\gradlew assembleDebug; cd ..
+# Windows
+cd android && gradlew assembleDebug && cd..
 ```
 
 > First build: 5–10 minutes (downloads Gradle + compiles native code).
