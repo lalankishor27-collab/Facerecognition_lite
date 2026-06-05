@@ -3,6 +3,7 @@
 > A production-grade, fully offline biometric attendance system built with React Native for Android & iOS. Designed for zero-network field deployments in remote Indian locations with cloud sync-on-restore capability.
 
 ---
+> Persentation Link: https://drive.google.com/file/d/1-v-cGAaD7GN3Nqx05mWF8wXC8R5mT44b/view?usp=sharing
 
 ## Table of Contents
 
